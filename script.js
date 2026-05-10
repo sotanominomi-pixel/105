@@ -943,3 +943,62 @@ setInterval(streamCanvasUpdate, 100);
         }
     });
 })();
+/* --- 【追加改善】ホーム画面での停止を回避するバックグラウンド維持アドオン --- */
+
+(function() {
+    const video = document.getElementById('pip-video');
+
+    // 1. ホーム画面に戻っても描画を止めさせないためのダミーオーディオ処理
+    // (iOS/Androidは動画に「音（無音）」が含まれると再生維持されやすい性質があります)
+    const createSilentAudioTrack = () => {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = ctx.createOscillator();
+        const dst = ctx.createMediaStreamDestination();
+        oscillator.connect(dst);
+        oscillator.start();
+        return dst.stream.getAudioTracks()[0];
+    };
+
+    // 2. 既存の動画ストリームに「無音トラック」を合成する
+    const originalRequestPiP = video.requestPictureInPicture;
+    video.requestPictureInPicture = async function() {
+        if (video.srcObject) {
+            const silentTrack = createSilentAudioTrack();
+            video.srcObject.addTrack(silentTrack);
+        }
+        return originalRequestPiP.apply(this);
+    };
+
+    // 3. Page Visibility API を利用した強制更新
+    // 画面が非表示（ホーム画面）になっても、PiPが生きていれば描画を継続
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden && document.pictureInPictureElement) {
+            console.log("Background mode: Keep-alive triggered");
+            // 背面時でも動画が「再生中」であることをOSにアピール
+            video.play(); 
+        }
+    });
+
+    // 4. Canvas描画ループを setInterval に変更
+    // (requestAnimationFrameは背面で止まるが、setIntervalは低速ながら動く場合がある)
+    setInterval(() => {
+        if (document.pictureInPictureElement) {
+            const ctx = pipCtx;
+            const canvas = pipCanvas;
+            
+            // 既存の描画ロジックをここでも実行（上書きせずに実行）
+            const now = new Date();
+            const realTimeOfDay = now.getTime() - new Date(now.toDateString()).getTime();
+            const { h, m, s } = calculateNTime(realTimeOfDay);
+            const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+            
+            ctx.fillStyle = "#000";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#fff";
+            ctx.font = "bold 60px Roboto";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(timeStr, canvas.width / 2, canvas.height / 2);
+        }
+    }, 1000); // 1秒間隔で背面維持を試行
+})();
